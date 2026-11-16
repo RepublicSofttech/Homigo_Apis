@@ -27,7 +27,7 @@ def issue_otp(phone):
         phone=phone, code_hash=sha256(code),
         expires_at=timezone.now() + timedelta(seconds=settings.OTP_TTL_SECONDS),
     )
-    send_sms(phone, f"Your HomeServ login OTP is {code}. Valid for 5 minutes.")
+    send_sms(phone, f"Your Homigo login OTP is {code}. Valid for 5 minutes.")
     return code
 
 
