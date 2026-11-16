@@ -16,6 +16,7 @@ class PricePreviewSerializer(serializers.Serializer):
                                           help_text="Empty = platform price for 'nearest available' (broadcast) booking")
     items = ItemInputSerializer(many=True)
     coupon_code = serializers.CharField(required=False, allow_blank=True, default="")
+    bring_supplies = serializers.BooleanField(required=False, default=False)
 
 
 class BookingCreateSerializer(PricePreviewSerializer):
@@ -52,6 +53,7 @@ class BookingSerializer(serializers.ModelSerializer):
                                               default=None)
     searching = serializers.SerializerMethodField()
     tip_paid = serializers.SerializerMethodField()
+    supplies_list = serializers.SerializerMethodField()
     customer_name = serializers.CharField(source="customer.full_name", read_only=True)
     customer_phone = serializers.SerializerMethodField()
     status_label = serializers.CharField(source="get_status_display", read_only=True)
@@ -76,6 +78,9 @@ class BookingSerializer(serializers.ModelSerializer):
     def get_coworkers(self, obj):
         return [{"id": c.id, "name": c.name, "phone": c.phone if self._role() != "customer" else None,
                  "rating": c.rating_avg, "photo": c.photo.url if c.photo else None} for c in obj.active_coworkers]
+
+    def get_supplies_list(self, obj):
+        return obj.service.supplies_list if obj.bring_supplies else []
 
     def get_tip_paid(self, obj):
         t = obj.tips.filter(status="paid").first()
@@ -104,6 +109,12 @@ class BookingListSerializer(BookingSerializer):
 
 
 class JobRequestSerializer(serializers.ModelSerializer):
+    bring_supplies = serializers.BooleanField(source="booking.bring_supplies", read_only=True)
+    supplies_list = serializers.SerializerMethodField()
+
+    def get_supplies_list(self, obj):
+        return obj.booking.service.supplies_list if obj.booking.bring_supplies else []
+
     """What a partner sees for a broadcast offer: enough to decide, no exact address or phone (privacy)."""
 
     booking_id = serializers.IntegerField(source="booking.id", read_only=True)
@@ -121,6 +132,7 @@ class JobRequestSerializer(serializers.ModelSerializer):
         from .models import BookingOffer
         model = BookingOffer
         fields = ["id", "booking_id", "booking_no", "service_name", "scheduled_start", "scheduled_end", "area", "items",
+                  "bring_supplies", "supplies_list",
                   "payment_mode", "job_value", "notes", "distance_km", "round", "status", "expires_at", "created_at"]
 
     def get_area(self, obj):
@@ -132,4 +144,4 @@ class JobRequestSerializer(serializers.ModelSerializer):
 
     def get_job_value(self, obj):
         b = obj.booking
-        return b.subtotal + b.visit_charge - b.partner_discount_share
+        return b.subtotal + b.visit_charge + b.supplies_charge - b.partner_discount_share

@@ -88,10 +88,11 @@ class PricePreviewView(APIView):
         d = s.validated_data
         service = get_object_or_404(Service, pk=d["service_id"])
         partner = get_object_or_404(AreaPartner, pk=d["partner_id"]) if d.get("partner_id") else None
-        q = svc.build_quote(request.user, partner, service, d["items"], d["coupon_code"])
+        q = svc.build_quote(request.user, partner, service, d["items"], d["coupon_code"], d.get("bring_supplies", False))
         return Response({
             "lines": [{k: v for k, v in l.items() if k != "service_item"} | {"service_item": l["service_item"].id} for l in q["lines"]],
-            **{k: q[k] for k in ("subtotal", "visit_charge", "discount", "convenience_fee", "tax", "total", "duration_minutes")},
+            **{k: q[k] for k in ("subtotal", "visit_charge", "discount", "convenience_fee", "tax", "total", "duration_minutes",
+                                 "bring_supplies", "supplies_charge", "supplies_list")},
             "coupon": q["offer"].code if q["offer"] else None,
         })
 
@@ -147,7 +148,7 @@ class BookingViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Cr
             partner, dist = None, 0
         booking = svc.create_booking(
             request.user, service, partner, address, d["items"], d["scheduled_start"], d["booking_type"],
-            d["payment_mode"], d["notes"], d["answers"], d["coupon_code"], round(dist, 2),
+            d["payment_mode"], d["notes"], d["answers"], d["coupon_code"], round(dist, 2), d.get("bring_supplies", False),
         )
         return Response(BookingSerializer(booking, context={"request": request}).data, status=201)
 
@@ -220,9 +221,12 @@ class BookingViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Cr
         self._require("coworker", "partner")
         b = self.get_object()
         svc.check_otp(b, request.data.get("otp", ""), "start")
-        svc.transition(b, S.IN_PROGRESS, request.user, "Work started (OTP verified)")
-        b.started_at = timezone.now()
-        b.save(update_fields=["started_at"])
+        kit = request.data.get("kit_confirmed") in (True, "true", "1", 1)
+        if b.bring_supplies and not kit:
+            raise BusinessError("KIT_NOT_CONFIRMED", "Confirm that you carried the supplies kit before starting.")
+        svc.transition(b, S.IN_PROGRESS, request.user, "Work started (OTP verified" + (", kit carried)" if kit else ")"))
+        b.started_at, b.supplies_confirmed = timezone.now(), kit and b.bring_supplies
+        b.save(update_fields=["started_at", "supplies_confirmed"])
         return self._ok(b)
 
     @action(detail=True, methods=["post"])

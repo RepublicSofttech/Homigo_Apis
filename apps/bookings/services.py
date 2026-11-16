@@ -121,21 +121,30 @@ def price_items(partner, service, items):
     return lines
 
 
-def build_quote(user, partner, service, items, coupon_code=""):
+def supplies_for(service, requested=False):
+    """Gap C13: returns (bring_kit, charge). 'included' always brings it; 'optional' only when the customer asks."""
+    mode = service.supplies_mode
+    bring = mode == "included" or (mode == "optional" and bool(requested))
+    return bring, money(service.supplies_charge if bring else 0)
+
+
+def build_quote(user, partner, service, items, coupon_code="", bring_supplies=False):
     from apps.offers.services import compute_discount
 
     lines = price_items(partner, service, items)
     subtotal = sum((l["total"] for l in lines), Decimal("0"))
     visit = money(service.visit_charge)
+    bring, supplies = supplies_for(service, bring_supplies)
     discount = partner_share = Decimal("0")
     offer = None
     if coupon_code:
         offer, discount, partner_share = compute_discount(coupon_code, user, service, partner, subtotal + visit)
     fee = money(get_setting("convenience_fee"))
     tax = money(fee * Decimal(str(get_setting("gst_percent"))) / 100)  # GST on platform fee; service GST per CA advice
-    total = money(subtotal + visit - discount + fee + tax)
+    total = money(subtotal + visit + supplies - discount + fee + tax)
     return {
         "lines": lines, "subtotal": money(subtotal), "visit_charge": visit, "discount": money(discount),
+        "bring_supplies": bring, "supplies_charge": supplies, "supplies_list": service.supplies_list if bring else [],
         "partner_discount_share": money(partner_share), "convenience_fee": fee, "tax": tax, "total": total,
         "duration_minutes": max(sum(l["duration"] for l in lines), 30), "offer": offer,
     }
@@ -175,10 +184,10 @@ def sla_minutes(booking):
 
 @transaction.atomic
 def create_booking(user, service, partner, address, items, scheduled_start, booking_type, payment_mode,
-                   notes="", answers=None, coupon_code="", distance_km=0):
+                   notes="", answers=None, coupon_code="", distance_km=0, bring_supplies=False):
     """partner=None creates a broadcast booking (gap P1) that is offered to the nearest partners."""
     broadcast = partner is None
-    quote = build_quote(user, partner, service, items, coupon_code)
+    quote = build_quote(user, partner, service, items, coupon_code, bring_supplies)
     end = scheduled_start + timedelta(minutes=quote["duration_minutes"])
     if scheduled_start < timezone.now() - timedelta(minutes=5):
         raise BusinessError("SLOT_IN_PAST", "Selected time is in the past.")
@@ -206,6 +215,7 @@ def create_booking(user, service, partner, address, items, scheduled_start, book
         status=status, payment_mode=payment_mode, subtotal=quote["subtotal"], visit_charge=quote["visit_charge"],
         discount=quote["discount"], partner_discount_share=quote["partner_discount_share"],
         convenience_fee=quote["convenience_fee"], tax=quote["tax"], total=quote["total"],
+        bring_supplies=quote["bring_supplies"], supplies_charge=quote["supplies_charge"],
         coupon_code=quote["offer"].code if quote["offer"] else "", start_otp=random_otp(4), end_otp=random_otp(4),
     )
     for l in quote["lines"]:
@@ -389,8 +399,8 @@ def check_otp(booking, entered, which):
 def recalc_total(booking):
     approved = booking.items.filter(is_addon=True, addon_status="approved")
     booking.addons_total = money(sum((i.total for i in approved), Decimal("0")))
-    booking.total = money(booking.subtotal + booking.visit_charge + booking.addons_total - booking.discount
-                          + booking.convenience_fee + booking.tax)
+    booking.total = money(booking.subtotal + booking.visit_charge + booking.addons_total + booking.supplies_charge
+                          - booking.discount + booking.convenience_fee + booking.tax)
     booking.save(update_fields=["addons_total", "total"])
 
 

@@ -51,7 +51,8 @@ def post_completion(booking):
     commission = money(service_value * pct / 100)
     gst = money(commission * Decimal(str(get_setting("gst_percent"))) / 100)
     # Partner receives service value + materials, platform funded discount is paid back by platform
-    partner_net = money(service_value + materials - commission - gst)
+    # Kit charge (gap C13) is a pass-through like materials: no commission, paid to the partner.
+    partner_net = money(service_value + materials + booking.supplies_charge - commission - gst)
     ledger = CommissionLedger.objects.create(
         booking=booking, partner=booking.partner, service_value=service_value, commission_percent=pct,
         commission_amount=commission, gst_on_commission=gst, partner_net=partner_net, payment_mode=booking.payment_mode,
