@@ -51,6 +51,7 @@ class BookingSerializer(serializers.ModelSerializer):
     partner_rating = serializers.DecimalField(source="partner.rating_avg", max_digits=3, decimal_places=2, read_only=True,
                                               default=None)
     searching = serializers.SerializerMethodField()
+    tip_paid = serializers.SerializerMethodField()
     customer_name = serializers.CharField(source="customer.full_name", read_only=True)
     customer_phone = serializers.SerializerMethodField()
     status_label = serializers.CharField(source="get_status_display", read_only=True)
@@ -75,6 +76,10 @@ class BookingSerializer(serializers.ModelSerializer):
     def get_coworkers(self, obj):
         return [{"id": c.id, "name": c.name, "phone": c.phone if self._role() != "customer" else None,
                  "rating": c.rating_avg, "photo": c.photo.url if c.photo else None} for c in obj.active_coworkers]
+
+    def get_tip_paid(self, obj):
+        t = obj.tips.filter(status="paid").first()
+        return t.amount if t else None
 
     def get_searching(self, obj):
         if obj.status != "searching":

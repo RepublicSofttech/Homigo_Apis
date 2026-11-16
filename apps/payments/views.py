@@ -16,7 +16,7 @@ from apps.partners.views import get_partner
 from apps.subscriptions.models import PartnerSubscription
 
 from . import gateway
-from .models import CommissionLedger, Payment, Settlement
+from .models import CommissionLedger, Payment, Settlement, Tip
 from .serializers import (
     CommissionSerializer, InitiatePaymentSerializer, PaymentSerializer, SettlementSerializer,
     VerifyPaymentSerializer, WalletSerializer, WalletTransactionSerializer,
@@ -38,6 +38,11 @@ class InitiatePaymentView(APIView):
             if b.status == "cancelled":
                 raise BusinessError("BOOKING_CANCELLED", "Booking is cancelled.")
             kwargs.update(booking=b, amount=b.total - b.amount_paid)
+        elif d["purpose"] == "tip":
+            tip = get_object_or_404(Tip, pk=d.get("tip_id"), customer=request.user)
+            if tip.status != "pending":
+                raise BusinessError("NOTHING_TO_PAY", "This tip is already paid.")
+            kwargs.update(tip=tip, booking=tip.booking, amount=tip.amount)
         elif d["purpose"] == "subscription":
             sub = get_object_or_404(PartnerSubscription, pk=d.get("subscription_id"), partner=get_partner(request))
             if sub.status != "pending_payment":
@@ -116,7 +121,11 @@ class PartnerEarningsView(APIView):
         return Response({
             "wallet": WalletSerializer(wallet).data,
             "cash_limit": get_setting("cash_limit"),
-            "totals": {k: v or 0 for k, v in agg.items()},
+            "totals": {**{k: v or 0 for k, v in agg.items()},
+                       "tips": Tip.objects.filter(partner=partner, status="paid").aggregate(v=Sum("amount"))["v"] or 0},
+            "tips": [{"booking_no": t.booking.booking_no, "coworker": t.coworker.name if t.coworker else None,
+                      "amount": t.amount, "paid_at": t.paid_at}
+                     for t in Tip.objects.filter(partner=partner, status="paid").select_related("booking", "coworker")[:50]],
             "transactions": WalletTransactionSerializer(wallet.transactions.all()[:50], many=True).data,
             "commissions": CommissionSerializer(CommissionLedger.objects.filter(partner=partner)[:50], many=True).data,
             "settlements": SettlementSerializer(partner.settlements.all()[:20], many=True).data,

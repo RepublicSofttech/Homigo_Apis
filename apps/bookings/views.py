@@ -304,6 +304,14 @@ class BookingViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Cr
         svc.notify(b.customer, "completion_requested", "Work finished", f"Share end OTP {b.end_otp} or confirm in app.", booking_id=b.id)
         return self._ok(b)
 
+    @action(detail=True, methods=["post"])
+    def tip(self, request, pk=None):
+        """Gap C1: customer creates a tip (then pays it with /payments/initiate/ purpose=tip)."""
+        self._require("customer")
+        from apps.payments.services import create_tip
+        t = create_tip(self.get_object(), request.user, request.data.get("amount", 0))
+        return Response({"tip_id": t.id, "amount": t.amount, "coworker": t.coworker.name if t.coworker else None}, status=201)
+
     @action(detail=True, methods=["get"], url_path="cancel-preview")
     def cancel_preview(self, request, pk=None):
         b = self.get_object()
@@ -361,10 +369,13 @@ class CoworkerJobsView(APIView):
             "completed": qs.filter(status=S.COMPLETED)[:30],
         }
         profiles = Coworker.objects.filter(user=request.user).select_related("partner")
+        from apps.payments.models import Tip
         return Response({
             "profile": [{"id": c.id, "name": c.name, "partner": c.partner.display_name, "status": c.status,
                          "verification_status": c.verification_status, "rating": c.rating_avg,
-                         "jobs_completed": c.jobs_completed} for c in profiles],
+                         "jobs_completed": c.jobs_completed,
+                         "tips_total": Tip.objects.filter(coworker=c, status="paid").aggregate(v=Sum("amount"))["v"] or 0}
+                        for c in profiles],
             **{k: BookingListSerializer(v, many=True, context={"request": request}).data for k, v in data.items()},
         })
 
