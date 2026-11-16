@@ -13,7 +13,7 @@ class HealthView(APIView):
     authentication_classes = []
 
     def get(self, request):
-        return Response({"status": "ok", "service": "homeserv-api"})
+        return Response({"status": "ok", "service": "homigo-api"})
 
 
 class AppSettingViewSet(viewsets.ModelViewSet):

@@ -257,6 +257,14 @@ def assign(booking, actor, coworker_ids):
            f"{', '.join(c.name for c in coworkers)} will handle your booking {booking.booking_no}.", booking_id=booking.id)
 
 
+def check_not_too_early(booking):
+    """Field work can begin at most `early_start_hours` before the booked slot."""
+    hours = float(get_setting("early_start_hours"))
+    if booking.scheduled_start - timezone.now() > timedelta(hours=hours):
+        when = timezone.localtime(booking.scheduled_start)
+        raise BusinessError("TOO_EARLY", f"This job is scheduled for {when:%d %b, %I:%M %p}. You can start travel {hours:g} hours before.")
+
+
 def check_otp(booking, entered, which):
     expected = booking.start_otp if which == "start" else booking.end_otp
     if str(entered).strip() != expected:

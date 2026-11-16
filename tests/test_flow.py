@@ -18,6 +18,8 @@ class FlowTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         call_command("seed_demo", verbosity=0)
+        from apps.core.models import AppSetting
+        AppSetting.objects.create(key="early_start_hours", value=72)  # tests book for tomorrow and start now
 
     def setUp(self):
         from django.core.cache import cache
@@ -190,3 +192,18 @@ class FlowTests(TestCase):
         self.assertNotIn("password", r.data)
         login = APIClient().post("/api/v1/auth/password-login/", {"phone": "9333333333", "password": "Verify@1234"}, format="json")
         self.assertEqual(login.status_code, 200)
+
+    def test_coworker_cannot_start_travel_too_early(self):
+        from apps.core.models import AppSetting
+        AppSetting.objects.filter(key="early_start_hours").update(value=2)
+        cust, partner, cw = self.login("9000000005"), self.login("9000000002"), self.login("9000000003")
+        plumber = self.svc("Plumber")
+        avail = cust.get(f"/api/v1/services/{plumber}/availability/?lat=28.625&lng=77.218").data
+        addr = cust.get("/api/v1/addresses/").data[0]["id"]
+        b = cust.post("/api/v1/bookings/", {"service_id": plumber, "address_id": addr,
+                                            "items": [{"service_item": avail["partner"]["rate_card"][0]["service_item"]}],
+                                            "scheduled_start": self.next_slot()}, format="json").data
+        partner.post(f"/api/v1/bookings/{b['id']}/accept/")
+        partner.post(f"/api/v1/bookings/{b['id']}/assign/", {"coworker_ids": [Coworker.objects.get(phone="9000000003").id]}, format="json")
+        r = cw.post(f"/api/v1/bookings/{b['id']}/on-the-way/")
+        self.assertEqual(r.data["code"], "TOO_EARLY")

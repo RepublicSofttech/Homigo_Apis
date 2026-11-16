@@ -1,4 +1,4 @@
-"""HomeServ backend settings. All secrets come from environment variables (.env)."""
+"""Homigo backend settings. All secrets come from environment variables (.env)."""
 from pathlib import Path
 import os
 
@@ -121,7 +121,7 @@ REST_FRAMEWORK = {
 REST_KNOX = {"TOKEN_TTL": None, "AUTH_HEADER_PREFIX": "Token"}
 
 SPECTACULAR_SETTINGS = {
-    "TITLE": "HomeServ API",
+    "TITLE": "Homigo API",
     "DESCRIPTION": "Door-to-door services marketplace API",
     "VERSION": "1.0.0",
 }
@@ -129,7 +129,7 @@ SPECTACULAR_SETTINGS = {
 CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", "http://localhost:5173")
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "http://localhost:5173")
 
-# ---- HomeServ business settings ----
+# ---- Homigo business settings ----
 # When true, the OTP is returned in the API response (for local development only).
 OTP_DEBUG = env_bool("OTP_DEBUG", False)
 OTP_TTL_SECONDS = int(os.getenv("OTP_TTL_SECONDS", "300"))

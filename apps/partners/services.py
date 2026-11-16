@@ -67,7 +67,7 @@ def decide_case(case, actor, decision, note=""):
                 p.bank_account.is_verified = True
                 p.bank_account.save(update_fields=["is_verified"])
         notify(p.owner, "verification_decision", f"Verification {decision}d",
-               note or "Your partner profile has been approved. Welcome to HomeServ!", partner_id=p.id)
+               note or "Your partner profile has been approved. Welcome to Homigo!", partner_id=p.id)
         audit(actor, f"partner_verification_{decision}", p, note=note)
     else:
         c = case.coworker
