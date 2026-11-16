@@ -99,6 +99,13 @@ class Command(BaseCommand):
         Offer.objects.get_or_create(code="CLEAN15", defaults={
             "title": "15% off on deep cleaning (up to ₹500)", "discount_type": "percent", "value": 15, "max_discount": 500,
             "service": Service.objects.get(name="Home Deep Cleaning"), "valid_from": now, "valid_to": now + timedelta(days=90)})
+        # Gap C13: professional brings the cleaning kit
+        Service.objects.filter(name="Home Deep Cleaning", supplies_mode="none").update(
+            supplies_mode="included", supplies_charge=0,
+            supplies_list=["Professional vacuum", "Mop & bucket", "Floor & bathroom cleaners", "Microfiber cloths", "Gloves"])
+        Service.objects.filter(name="Maid", supplies_mode="none").update(
+            supplies_mode="optional", supplies_charge=49,
+            supplies_list=["Mop & bucket", "Floor cleaner", "Dusting cloths", "Gloves"])
         self.stdout.write(self.style.SUCCESS("Catalogue, plans and offers loaded."))
         if opts["catalogue_only"]:
             return

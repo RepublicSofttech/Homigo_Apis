@@ -83,6 +83,10 @@ class Booking(TimeStampedModel):
     fallback_count = models.PositiveSmallIntegerField(default=0)
     rejected_partner_ids = models.JSONField(default=list, blank=True)
     cash_collected = models.BooleanField(default=False)
+    # Gap C13: professional brings the supplies kit
+    bring_supplies = models.BooleanField(default=False)
+    supplies_charge = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    supplies_confirmed = models.BooleanField(default=False, help_text="Professional confirmed the kit at job start")
 
     class Meta:
         ordering = ["-created_at"]
