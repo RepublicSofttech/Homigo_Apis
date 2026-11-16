@@ -196,6 +196,7 @@ class BookingViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Cr
     def on_the_way(self, request, pk=None):
         self._require("coworker", "partner")
         b = self.get_object()
+        svc.check_not_too_early(b)
         svc.transition(b, S.ON_THE_WAY, request.user, "On the way")
         svc.notify(b.customer, "on_the_way", "Professional is on the way", f"For booking {b.booking_no}", booking_id=b.id)
         return self._ok(b)

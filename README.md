@@ -1,4 +1,4 @@
-# HomeServ – Backend API
+# Homigo – Backend API
 
 Door-to-door services marketplace (Customer · Area Partner · Coworker · Admin).
 Django 5 + Django REST Framework + Knox token auth + PostgreSQL.

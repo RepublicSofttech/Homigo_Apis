@@ -81,5 +81,5 @@ class PartnerSubscription(TimeStampedModel):
         self.start_date = start
         self.end_date = start + timedelta(days=self.plan.duration_days - 1)
         self.status = self.Status.ACTIVE
-        self.invoice_no = self.invoice_no or f"HS-SUB-{self.pk:06d}"
+        self.invoice_no = self.invoice_no or f"HG-SUB-{self.pk:06d}"
         self.save()

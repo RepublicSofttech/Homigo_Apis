@@ -85,7 +85,7 @@ class Booking(TimeStampedModel):
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
         if not self.booking_no:
-            self.booking_no = f"HS{self.created_at:%y%m}{self.pk:05d}"
+            self.booking_no = f"HG{self.created_at:%y%m}{self.pk:05d}"
             super().save(update_fields=["booking_no"])
 
     @property

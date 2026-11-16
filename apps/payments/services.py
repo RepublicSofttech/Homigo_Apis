@@ -61,8 +61,8 @@ def post_completion(booking):
     else:
         # Partner already holds the cash, so platform commission becomes a receivable.
         wallet_post(booking.partner, -(commission + gst), "cash_commission", f"Commission due for cash job {booking.booking_no}", booking)
-        booking.payment_status, booking.amount_paid = "paid", booking.total
-        booking.save(update_fields=["payment_status", "amount_paid"])
+        booking.payment_status, booking.amount_paid, booking.cash_collected = "paid", booking.total, True
+        booking.save(update_fields=["payment_status", "amount_paid", "cash_collected"])
     return ledger
 
 

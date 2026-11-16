@@ -11,7 +11,7 @@ class UserAdmin(BaseUserAdmin):
     search_fields = ("phone", "first_name", "last_name", "email")
     ordering = ("-date_joined",)
     fieldsets = BaseUserAdmin.fieldsets + (
-        ("HomeServ", {"fields": ("phone", "user_type", "admin_role", "gender", "date_of_birth", "avatar", "language")}),
+        ("Homigo", {"fields": ("phone", "user_type", "admin_role", "gender", "date_of_birth", "avatar", "language")}),
     )
     add_fieldsets = ((None, {"fields": ("phone", "username", "user_type", "password1", "password2")}),)
 

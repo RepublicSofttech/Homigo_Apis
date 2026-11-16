@@ -19,6 +19,7 @@ DEFAULTS = {
     "dispute_window_hours": 48,
     "review_window_days": 7,
     "min_coworkers_default": 1,
+    "early_start_hours": 2,
 }
 
 
