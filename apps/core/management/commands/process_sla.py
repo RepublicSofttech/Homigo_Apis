@@ -1,5 +1,6 @@
 """Run every minute via cron / scheduler:
-  - partner acceptance SLA breach -> fallback partner or cancel (BR-B4)
+  - partner acceptance SLA breach -> broadcast to nearest partners (BR-B4 / gap P1)
+  - broadcast round timed out -> next batch of partners, or cancel + refund after the last round
   - payment_pending bookings older than 15 min -> cancelled
   - subscriptions past grace -> expired
   - coworker documents expired -> coworker suspended from new jobs (BR-C4)
@@ -10,7 +11,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from apps.bookings.models import Booking
-from apps.bookings.services import cancel, reject_or_fallback
+from apps.bookings.services import broadcast_next_round, cancel, reject_or_fallback
 from apps.core.config_defaults import get_setting
 from apps.notifications.services import notify
 from apps.partners.models import Coworker
@@ -25,6 +26,9 @@ class Command(BaseCommand):
         n = 0
         for b in Booking.objects.filter(status="pending_acceptance", sla_due_at__lt=now):
             reject_or_fallback(b, None, "Partner did not accept within SLA", auto=True)
+            n += 1
+        for b in Booking.objects.filter(status="searching", sla_due_at__lt=now):
+            broadcast_next_round(b)  # gap P1: round timed out -> next nearest partners (or cancel)
             n += 1
         for b in Booking.objects.filter(status="payment_pending", created_at__lt=now - timedelta(minutes=15)):
             cancel(b, None, "system", "Payment not completed", waive_fee=True)

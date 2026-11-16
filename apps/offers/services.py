@@ -27,7 +27,7 @@ def compute_discount(code, user, service, partner, order_value):
         fail(f"This coupon is valid only for {offer.service.name}.")
     if offer.category_id and offer.category_id != service.category_id:
         fail("This coupon is not valid for this service.")
-    if offer.partner_id and partner and offer.partner_id != partner.id:
+    if offer.partner_id and (partner is None or offer.partner_id != partner.id):
         fail("This coupon is not valid for this provider.")
     if order_value < offer.min_order_value:
         fail(f"Minimum order value is ₹{offer.min_order_value}.")
