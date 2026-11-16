@@ -12,7 +12,8 @@ class PaymentSerializer(serializers.ModelSerializer):
 
 
 class InitiatePaymentSerializer(serializers.Serializer):
-    purpose = serializers.ChoiceField(choices=["booking", "subscription", "wallet_topup"])
+    purpose = serializers.ChoiceField(choices=["booking", "subscription", "wallet_topup", "tip"])
+    tip_id = serializers.IntegerField(required=False)
     booking_id = serializers.IntegerField(required=False)
     subscription_id = serializers.IntegerField(required=False)
     amount = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)

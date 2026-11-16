@@ -104,7 +104,51 @@ def mark_success(payment, gateway_payment_id="", raw=None):
                f"{payment.subscription.plan.name} plan is active till {payment.subscription.end_date:%d %b %Y}.")
     elif payment.purpose == Payment.Purpose.WALLET_TOPUP:
         wallet_post(payment.user.partner, payment.amount, "topup", "Wallet top-up")
+    elif payment.purpose == Payment.Purpose.TIP:
+        settle_tip(payment.tip)
     return payment
+
+
+# ---------------- Tips (gap C1) ----------------
+def create_tip(booking, customer, amount):
+    from datetime import timedelta
+
+    from .models import Tip
+
+    if booking.customer_id != customer.id:
+        raise BusinessError("NOT_YOUR_BOOKING", "Booking not found.", 404)
+    if booking.status != "completed":
+        raise BusinessError("TIP_NOT_ALLOWED", "You can tip only after the job is completed.")
+    days = int(get_setting("tip_window_days"))
+    if booking.completed_at and booking.completed_at < timezone.now() - timedelta(days=days):
+        raise BusinessError("TIP_WINDOW_CLOSED", f"Tips can be added within {days} days of completion.")
+    if booking.tips.filter(status=Tip.Status.PAID).exists():
+        raise BusinessError("ALREADY_TIPPED", "You have already tipped for this booking.", 409)
+    amount = money(amount)
+    max_tip = money(get_setting("tip_max_amount"))
+    if amount < 10 or amount > max_tip:
+        raise BusinessError("INVALID_TIP", f"Tip must be between ₹10 and ₹{max_tip}.")
+    booking.tips.filter(status=Tip.Status.PENDING).delete()
+    coworkers = booking.active_coworkers
+    return Tip.objects.create(booking=booking, customer=customer, partner=booking.partner,
+                              coworker=coworkers[0] if coworkers else None, amount=amount)
+
+
+def settle_tip(tip):
+    if tip.status == "paid":
+        return tip
+    tip.status, tip.paid_at = "paid", timezone.now()
+    tip.save(update_fields=["status", "paid_at"])
+    who = tip.coworker.name if tip.coworker else "your team"
+    wallet_post(tip.partner, tip.amount, "tip", f"Tip for {who} on {tip.booking.booking_no} (pass 100% to the professional)",
+                tip.booking)
+    notify(tip.partner.owner, "tip_received", f"₹{tip.amount} tip received",
+           f"A customer tipped {who} for {tip.booking.booking_no}. Please pass it on in full.", booking_id=tip.booking_id)
+    if tip.coworker:
+        notify(tip.coworker.user, "tip_received", f"You got a ₹{tip.amount} tip!",
+               f"Customer tipped you for {tip.booking.booking_no}. It will be paid via {tip.partner.display_name}.",
+               booking_id=tip.booking_id)
+    return tip
 
 
 def run_settlements(actor):

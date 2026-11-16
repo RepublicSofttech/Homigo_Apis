@@ -9,6 +9,7 @@ class Payment(TimeStampedModel):
         BOOKING = "booking", "Booking"
         SUBSCRIPTION = "subscription", "Partner subscription"
         WALLET_TOPUP = "wallet_topup", "Wallet top-up"
+        TIP = "tip", "Tip for professional"
 
     class Status(models.TextChoices):
         CREATED = "created", "Created"
@@ -20,6 +21,7 @@ class Payment(TimeStampedModel):
     purpose = models.CharField(max_length=20, choices=Purpose.choices)
     booking = models.ForeignKey("bookings.Booking", null=True, blank=True, on_delete=models.PROTECT, related_name="payments")
     subscription = models.ForeignKey("subscriptions.PartnerSubscription", null=True, blank=True, on_delete=models.PROTECT, related_name="payments")
+    tip = models.ForeignKey("payments.Tip", null=True, blank=True, on_delete=models.PROTECT, related_name="payments")
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     method = models.CharField(max_length=20, default="online")
     gateway = models.CharField(max_length=20, default="mock")
@@ -85,6 +87,26 @@ class Settlement(TimeStampedModel):
     utr = models.CharField(max_length=50, blank=True)
     paid_at = models.DateTimeField(null=True, blank=True)
     note = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
+class Tip(TimeStampedModel):
+    """Gap C1: customer tips the professional after a completed job. 100% goes to the coworker
+    (paid out through the partner's wallet, no commission)."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Awaiting payment"
+        PAID = "paid", "Paid"
+
+    booking = models.ForeignKey("bookings.Booking", on_delete=models.PROTECT, related_name="tips")
+    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="tips_given")
+    partner = models.ForeignKey("partners.AreaPartner", on_delete=models.PROTECT, related_name="tips")
+    coworker = models.ForeignKey("partners.Coworker", null=True, blank=True, on_delete=models.SET_NULL, related_name="tips")
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    paid_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at"]

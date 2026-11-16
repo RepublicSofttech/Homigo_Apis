@@ -23,6 +23,8 @@ DEFAULTS = {
     "broadcast_batch_size": 3,
     "broadcast_round_minutes": 5,
     "broadcast_max_rounds": 3,
+    "tip_max_amount": 1000,
+    "tip_window_days": 7,
 }
 
 
