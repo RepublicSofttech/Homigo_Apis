@@ -65,7 +65,7 @@ class FlowTests(TestCase):
         avail = cust.get(f"/api/v1/services/{plumber}/availability/?lat=28.625&lng=77.218").data
         item = avail["partner"]["rate_card"][0]["service_item"]
         addr = cust.get("/api/v1/addresses/").data[0]["id"]
-        r = cust.post("/api/v1/bookings/", {"service_id": plumber, "address_id": addr, "items": [{"service_item": item, "quantity": 2}],
+        r = cust.post("/api/v1/bookings/", {"service_id": plumber, "partner_id": avail["partner"]["id"], "address_id": addr, "items": [{"service_item": item, "quantity": 2}],
                                             "scheduled_start": self.next_slot(), "payment_mode": "cash", "coupon_code": "WELCOME100"}, format="json")
         self.assertEqual(r.status_code, 201, r.data)
         b = r.data
@@ -111,7 +111,7 @@ class FlowTests(TestCase):
         avail = cust.get(f"/api/v1/services/{elec}/availability/?lat=28.625&lng=77.218").data
         item = avail["partner"]["rate_card"][0]["service_item"]
         addr = cust.get("/api/v1/addresses/").data[0]["id"]
-        r = cust.post("/api/v1/bookings/", {"service_id": elec, "address_id": addr, "items": [{"service_item": item}],
+        r = cust.post("/api/v1/bookings/", {"service_id": elec, "partner_id": avail["partner"]["id"], "address_id": addr, "items": [{"service_item": item}],
                                             "scheduled_start": self.next_slot(), "payment_mode": "online"}, format="json")
         self.assertEqual(r.data["status"], "payment_pending")
         pay = cust.post("/api/v1/payments/initiate/", {"purpose": "booking", "booking_id": r.data["id"]}, format="json").data
@@ -130,7 +130,7 @@ class FlowTests(TestCase):
         plumber = self.svc("Plumber")
         avail = cust.get(f"/api/v1/services/{plumber}/availability/?lat=28.625&lng=77.218").data
         addr = cust.get("/api/v1/addresses/").data[0]["id"]
-        r = cust.post("/api/v1/bookings/", {"service_id": plumber, "address_id": addr,
+        r = cust.post("/api/v1/bookings/", {"service_id": plumber, "address_id": addr, "partner_id": avail["partner"]["id"],
                                             "items": [{"service_item": avail["partner"]["rate_card"][0]["service_item"]}],
                                             "scheduled_start": self.next_slot()}, format="json")
         partner.post(f"/api/v1/bookings/{r.data['id']}/reject/", {"reason": "Busy"}, format="json")
@@ -200,7 +200,7 @@ class FlowTests(TestCase):
         plumber = self.svc("Plumber")
         avail = cust.get(f"/api/v1/services/{plumber}/availability/?lat=28.625&lng=77.218").data
         addr = cust.get("/api/v1/addresses/").data[0]["id"]
-        b = cust.post("/api/v1/bookings/", {"service_id": plumber, "address_id": addr,
+        b = cust.post("/api/v1/bookings/", {"service_id": plumber, "address_id": addr, "partner_id": avail["partner"]["id"],
                                             "items": [{"service_item": avail["partner"]["rate_card"][0]["service_item"]}],
                                             "scheduled_start": self.next_slot()}, format="json").data
         partner.post(f"/api/v1/bookings/{b['id']}/accept/")

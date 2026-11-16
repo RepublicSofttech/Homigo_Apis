@@ -19,8 +19,10 @@ from apps.partners.serializers import PublicPartnerSerializer, RateCardItemSeria
 from apps.partners.views import get_partner
 
 from . import services as svc
-from .models import OPEN_STATUSES, Booking, BookingItem, BookingStatus
-from .serializers import BookingCreateSerializer, BookingListSerializer, BookingSerializer, PricePreviewSerializer
+from .models import OPEN_STATUSES, Booking, BookingItem, BookingOffer, BookingStatus
+from .serializers import (
+    BookingCreateSerializer, BookingListSerializer, BookingSerializer, JobRequestSerializer, PricePreviewSerializer,
+)
 
 S = BookingStatus
 
@@ -61,15 +63,19 @@ class SlotsView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
+        """?partner_id=  -> that partner's slots.  ?lat=&lng= (no partner) -> combined slots of nearby partners."""
         q = request.query_params
-        partner = get_object_or_404(AreaPartner, pk=q.get("partner_id"))
         service = get_object_or_404(Service, pk=q.get("service_id"))
         try:
             day = date_cls.fromisoformat(q.get("date", ""))
         except ValueError:
             day = timezone.localdate()
         duration = int(q.get("duration", 60))
-        return Response({"date": day, "slots": svc.get_slots(partner, service, day, duration)})
+        if q.get("partner_id"):
+            partner = get_object_or_404(AreaPartner, pk=q.get("partner_id"))
+            return Response({"date": day, "slots": svc.get_slots(partner, service, day, duration)})
+        lat, lng = parse_latlng(request)
+        return Response({"date": day, "slots": svc.get_area_slots(service, lat, lng, day, duration)})
 
 
 class PricePreviewView(APIView):
@@ -81,7 +87,7 @@ class PricePreviewView(APIView):
         s.is_valid(raise_exception=True)
         d = s.validated_data
         service = get_object_or_404(Service, pk=d["service_id"])
-        partner = get_object_or_404(AreaPartner, pk=d["partner_id"])
+        partner = get_object_or_404(AreaPartner, pk=d["partner_id"]) if d.get("partner_id") else None
         q = svc.build_quote(request.user, partner, service, d["items"], d["coupon_code"])
         return Response({
             "lines": [{k: v for k, v in l.items() if k != "service_item"} | {"service_item": l["service_item"].id} for l in q["lines"]],
@@ -135,10 +141,10 @@ class BookingViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Cr
             if not live or dist > float(partner.service_radius_km):
                 raise BusinessError("PARTNER_NOT_AVAILABLE", "This provider does not serve your address.")
         else:
-            found = svc.find_partners(service, address.latitude, address.longitude, limit=1)
-            if not found:
+            # Gap P1: no provider chosen -> broadcast to the nearest partners, first to accept wins.
+            if not svc.find_partners(service, address.latitude, address.longitude, limit=1):
                 raise BusinessError("SERVICE_NOT_AVAILABLE_AT_LOCATION", "No provider serves this address yet.", 404)
-            partner, dist = found[0]
+            partner, dist = None, 0
         booking = svc.create_booking(
             request.user, service, partner, address, d["items"], d["scheduled_start"], d["booking_type"],
             d["payment_mode"], d["notes"], d["answers"], d["coupon_code"], round(dist, 2),
@@ -316,6 +322,33 @@ class BookingViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Cr
         return self._ok(b)
 
 
+class JobRequestViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+    """Gap P1: broadcast job requests for the logged-in partner. First partner to accept gets the booking."""
+
+    permission_classes = [IsPartner]
+    serializer_class = JobRequestSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        qs = BookingOffer.objects.filter(partner=get_partner(self.request)).select_related("booking__service")
+        if self.request.query_params.get("all") != "1":
+            qs = qs.filter(status=BookingOffer.Status.PENDING, expires_at__gt=timezone.now())
+        return qs.prefetch_related("booking__items")
+
+    def _offer(self, pk):
+        return get_object_or_404(BookingOffer, pk=pk, partner=get_partner(self.request))
+
+    @action(detail=True, methods=["post"])
+    def accept(self, request, pk=None):
+        booking = svc.accept_offer(self._offer(pk), request.user)
+        return Response(BookingSerializer(booking, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"])
+    def decline(self, request, pk=None):
+        svc.decline_offer(self._offer(pk), request.user, request.data.get("reason", ""))
+        return Response({"message": "Declined"})
+
+
 class CoworkerJobsView(APIView):
     permission_classes = [IsCoworker]
 
@@ -353,6 +386,7 @@ class PartnerDashboardView(APIView):
             "partner": {"id": p.id, "display_name": p.display_name, "verification_status": p.verification_status,
                         "rating": p.rating_avg, "rating_count": p.rating_count, "is_live": live},
             "pending_acceptance": qs.filter(status=S.PENDING_ACCEPTANCE).count(),
+            "job_requests": BookingOffer.objects.filter(partner=p, status="pending", expires_at__gt=timezone.now()).count(),
             "today_jobs": qs.filter(scheduled_start__date=today).exclude(status__in=[S.CANCELLED]).count(),
             "in_progress": qs.filter(status__in=[S.ON_THE_WAY, S.ARRIVED, S.IN_PROGRESS, S.COMPLETION_REQUESTED]).count(),
             "completed_month": qs.filter(status=S.COMPLETED, completed_at__date__gte=month_start).count(),
@@ -387,7 +421,8 @@ class AdminDashboardView(APIView):
             "subscription_revenue_month": PartnerSubscription.objects.filter(status__in=["active", "cancelled"], start_date__gte=month_start).aggregate(v=Sum("amount"))["v"] or 0,
             "bookings_today": b.filter(created_at__date=today).count(),
             "live_jobs": b.filter(status__in=[S.ON_THE_WAY, S.ARRIVED, S.IN_PROGRESS]).count(),
-            "sla_breaches": b.filter(status=S.PENDING_ACCEPTANCE, sla_due_at__lt=timezone.now()).count(),
+            "sla_breaches": b.filter(status__in=[S.PENDING_ACCEPTANCE, S.SEARCHING], sla_due_at__lt=timezone.now()).count(),
+            "searching_now": b.filter(status=S.SEARCHING).count(),
             "pending_verifications": VerificationCase.objects.filter(status__in=["open", "in_review"]).count(),
             "partners": {"total": AreaPartner.objects.count(),
                          "approved": AreaPartner.objects.filter(verification_status="approved").count()},

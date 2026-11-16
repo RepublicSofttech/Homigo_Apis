@@ -6,6 +6,7 @@ from apps.core.models import TimeStampedModel
 
 class BookingStatus(models.TextChoices):
     PAYMENT_PENDING = "payment_pending", "Payment Pending"
+    SEARCHING = "searching", "Finding a Professional"
     PENDING_ACCEPTANCE = "pending_acceptance", "Pending Acceptance"
     CONFIRMED = "confirmed", "Confirmed"
     ASSIGNED = "assigned", "Coworker Assigned"
@@ -20,7 +21,7 @@ class BookingStatus(models.TextChoices):
 
 
 OPEN_STATUSES = [
-    BookingStatus.PAYMENT_PENDING, BookingStatus.PENDING_ACCEPTANCE, BookingStatus.CONFIRMED,
+    BookingStatus.PAYMENT_PENDING, BookingStatus.SEARCHING, BookingStatus.PENDING_ACCEPTANCE, BookingStatus.CONFIRMED,
     BookingStatus.ASSIGNED, BookingStatus.ON_THE_WAY, BookingStatus.ARRIVED, BookingStatus.IN_PROGRESS,
     BookingStatus.COMPLETION_REQUESTED,
 ]
@@ -38,7 +39,14 @@ class Booking(TimeStampedModel):
 
     booking_no = models.CharField(max_length=20, unique=True, blank=True)
     customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="bookings")
-    partner = models.ForeignKey("partners.AreaPartner", on_delete=models.PROTECT, related_name="bookings")
+    class DispatchMode(models.TextChoices):
+        DIRECT = "direct", "Customer chose the provider"
+        BROADCAST = "broadcast", "Sent to nearest providers"
+
+    # Empty while a broadcast booking is still searching for a partner.
+    partner = models.ForeignKey("partners.AreaPartner", null=True, blank=True, on_delete=models.PROTECT, related_name="bookings")
+    dispatch_mode = models.CharField(max_length=10, choices=DispatchMode.choices, default=DispatchMode.DIRECT)
+    broadcast_round = models.PositiveSmallIntegerField(default=0)
     service = models.ForeignKey("catalogue.Service", on_delete=models.PROTECT, related_name="bookings")
     booking_type = models.CharField(max_length=20, default="scheduled")
     address = models.JSONField(help_text="Address snapshot")
@@ -130,3 +138,31 @@ class BookingStatusHistory(models.Model):
 
     class Meta:
         ordering = ["created_at"]
+
+
+class BookingOffer(models.Model):
+    """Gap P1: a broadcast booking is offered to the nearest partners; the first to accept wins."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Waiting for reply"
+        ACCEPTED = "accepted", "Accepted"
+        DECLINED = "declined", "Declined"
+        EXPIRED = "expired", "Expired"
+        LOST = "lost", "Taken by another partner"
+
+    booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name="offers")
+    partner = models.ForeignKey("partners.AreaPartner", on_delete=models.CASCADE, related_name="booking_offers")
+    round = models.PositiveSmallIntegerField(default=1)
+    distance_km = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    expires_at = models.DateTimeField()
+    responded_at = models.DateTimeField(null=True, blank=True)
+    decline_reason = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [models.UniqueConstraint(fields=["booking", "partner"], name="uniq_offer_per_partner")]
+
+    def __str__(self):
+        return f"{self.booking} -> {self.partner} ({self.status})"

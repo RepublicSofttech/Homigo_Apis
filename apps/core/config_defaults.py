@@ -20,6 +20,9 @@ DEFAULTS = {
     "review_window_days": 7,
     "min_coworkers_default": 1,
     "early_start_hours": 2,
+    "broadcast_batch_size": 3,
+    "broadcast_round_minutes": 5,
+    "broadcast_max_rounds": 3,
 }
 
 

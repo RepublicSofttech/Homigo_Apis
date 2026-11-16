@@ -12,7 +12,7 @@ from apps.core.utils import audit, bounding_box, haversine_km, random_otp
 from apps.notifications.services import notify
 from apps.partners.models import AreaPartner, Coworker
 
-from .models import OPEN_STATUSES, Booking, BookingAssignment, BookingItem, BookingStatus, BookingStatusHistory
+from .models import OPEN_STATUSES, Booking, BookingAssignment, BookingItem, BookingOffer, BookingStatus, BookingStatusHistory
 
 TWO = Decimal("0.01")
 S = BookingStatus
@@ -79,13 +79,35 @@ def get_slots(partner, service, day, duration_minutes=60):
     return slots
 
 
+def get_area_slots(service, lat, lng, day, duration_minutes=60):
+    """Slots for a broadcast booking: a slot is open when any nearby live partner has capacity."""
+    partners = [p for p, _ in find_partners(service, lat, lng, limit=5)]
+    if not partners:
+        return []
+    merged = None
+    for p in partners:
+        slots = get_slots(p, service, day, duration_minutes)
+        if merged is None:
+            merged = {s["start"]: dict(s) for s in slots}
+            continue
+        for s in slots:
+            m = merged.setdefault(s["start"], dict(s, capacity=0, available=False))
+            m["capacity"] += s["capacity"]
+            m["available"] = m["available"] or s["available"]
+    return sorted(merged.values(), key=lambda s: s["start"])
+
+
 # ---------------- Pricing ----------------
 def price_items(partner, service, items):
-    """items: [{'service_item': id, 'quantity': n}] -> list of dict lines using partner rate card."""
+    """items: [{'service_item': id, 'quantity': n}] -> priced lines.
+    With a partner: that partner's rate card. Without (broadcast): the platform price (ServiceItem.default_price)."""
     if not items:
         raise BusinessError("NO_ITEMS", "Select at least one item.")
     lines = []
-    rates = {r.service_item_id: r.price for r in partner.rate_card.filter(is_active=True, service_item__service=service)}
+    if partner is None:
+        rates = {i.id: i.default_price for i in service.items.filter(is_active=True)}
+    else:
+        rates = {r.service_item_id: r.price for r in partner.rate_card.filter(is_active=True, service_item__service=service)}
     for it in items:
         item = ServiceItem.objects.filter(pk=it["service_item"], service=service, is_active=True).first()
         if not item:
@@ -121,8 +143,9 @@ def build_quote(user, partner, service, items, coupon_code=""):
 
 # ---------------- State machine (BR-B1) ----------------
 TRANSITIONS = {
-    S.PAYMENT_PENDING: {S.PENDING_ACCEPTANCE, S.CANCELLED},
-    S.PENDING_ACCEPTANCE: {S.CONFIRMED, S.CANCELLED, S.PENDING_ACCEPTANCE},
+    S.PAYMENT_PENDING: {S.PENDING_ACCEPTANCE, S.SEARCHING, S.CANCELLED},
+    S.SEARCHING: {S.SEARCHING, S.CONFIRMED, S.CANCELLED},
+    S.PENDING_ACCEPTANCE: {S.CONFIRMED, S.CANCELLED, S.PENDING_ACCEPTANCE, S.SEARCHING},
     S.CONFIRMED: {S.ASSIGNED, S.CANCELLED},
     S.ASSIGNED: {S.ASSIGNED, S.ON_THE_WAY, S.CANCELLED},
     S.ON_THE_WAY: {S.ARRIVED, S.CANCELLED},
@@ -153,19 +176,31 @@ def sla_minutes(booking):
 @transaction.atomic
 def create_booking(user, service, partner, address, items, scheduled_start, booking_type, payment_mode,
                    notes="", answers=None, coupon_code="", distance_km=0):
-    # Lock partner row so two checkouts can't take the last slot at the same time.
-    AreaPartner.objects.select_for_update().get(pk=partner.pk)
-    if payment_mode == "cash" and not partner.accepts_cash:
-        raise BusinessError("CASH_NOT_ALLOWED", "This provider accepts online payment only.")
+    """partner=None creates a broadcast booking (gap P1) that is offered to the nearest partners."""
+    broadcast = partner is None
     quote = build_quote(user, partner, service, items, coupon_code)
     end = scheduled_start + timedelta(minutes=quote["duration_minutes"])
     if scheduled_start < timezone.now() - timedelta(minutes=5):
         raise BusinessError("SLOT_IN_PAST", "Selected time is in the past.")
-    if booking_type != "instant" and slot_capacity(partner, service, scheduled_start, end) <= 0:
-        raise BusinessError("SLOT_UNAVAILABLE", "This slot was just taken. Please pick another time.", 409)
-    status = S.PAYMENT_PENDING if payment_mode == "online" else S.PENDING_ACCEPTANCE
+    if broadcast:
+        candidates = broadcast_candidates(service, address.latitude, address.longitude, scheduled_start, end,
+                                          payment_mode, exclude_ids=(), extra_radius_km=0)
+        if not candidates:
+            raise BusinessError("SLOT_UNAVAILABLE", "No professional is free at this time near you. Please pick another slot.", 409)
+    else:
+        # Lock partner row so two checkouts can't take the last slot at the same time.
+        AreaPartner.objects.select_for_update().get(pk=partner.pk)
+        if payment_mode == "cash" and not partner.accepts_cash:
+            raise BusinessError("CASH_NOT_ALLOWED", "This provider accepts online payment only.")
+        if booking_type != "instant" and slot_capacity(partner, service, scheduled_start, end) <= 0:
+            raise BusinessError("SLOT_UNAVAILABLE", "This slot was just taken. Please pick another time.", 409)
+    if payment_mode == "online":
+        status = S.PAYMENT_PENDING
+    else:
+        status = S.SEARCHING if broadcast else S.PENDING_ACCEPTANCE
     booking = Booking.objects.create(
         customer=user, partner=partner, service=service, booking_type=booking_type,
+        dispatch_mode=Booking.DispatchMode.BROADCAST if broadcast else Booking.DispatchMode.DIRECT,
         address=address.snapshot(), latitude=address.latitude, longitude=address.longitude, distance_km=distance_km,
         scheduled_start=scheduled_start, scheduled_end=end, notes=notes, answers=answers or {},
         status=status, payment_mode=payment_mode, subtotal=quote["subtotal"], visit_charge=quote["visit_charge"],
@@ -183,6 +218,8 @@ def create_booking(user, service, partner, address, items, scheduled_start, book
     BookingStatusHistory.objects.create(booking=booking, to_status=status, actor=user, note="Booking created")
     if status == S.PENDING_ACCEPTANCE:
         send_to_partner(booking)
+    elif status == S.SEARCHING:
+        broadcast_next_round(booking)
     return booking
 
 
@@ -195,13 +232,96 @@ def send_to_partner(booking):
 
 
 def on_payment_success(booking):
-    if booking.status == S.PAYMENT_PENDING:
+    if booking.status != S.PAYMENT_PENDING:
+        return
+    if booking.dispatch_mode == Booking.DispatchMode.BROADCAST:
+        transition(booking, S.SEARCHING, note="Payment received")
+        broadcast_next_round(booking)
+    else:
         transition(booking, S.PENDING_ACCEPTANCE, note="Payment received")
         send_to_partner(booking)
 
 
+# ---------------- Broadcast dispatch (gap P1) ----------------
+def broadcast_candidates(service, lat, lng, start, end, payment_mode, exclude_ids=(), extra_radius_km=0):
+    """Nearest live partners who also have a free coworker for the slot (and take cash, if needed)."""
+    out = []
+    for p, dist in find_partners(service, lat, lng, exclude_ids=exclude_ids, extra_radius_km=extra_radius_km, limit=20):
+        if payment_mode == "cash" and not p.accepts_cash:
+            continue
+        if slot_capacity(p, service, start, end) <= 0:
+            continue
+        out.append((p, dist))
+    return out
+
+
+def broadcast_next_round(booking, actor=None):
+    """Send the booking to the next batch of nearest partners. Cancels with refund when nobody is left."""
+    booking.offers.filter(status=BookingOffer.Status.PENDING).update(status=BookingOffer.Status.EXPIRED)
+    max_rounds = int(get_setting("broadcast_max_rounds"))
+    if booking.broadcast_round >= max_rounds:
+        cancel(booking, actor, "system", "No professional accepted in time", waive_fee=True)
+        return []
+    already = set(booking.offers.values_list("partner_id", flat=True)) | set(booking.rejected_partner_ids)
+    extra = 0
+    if booking.broadcast_round >= 1:  # widen to the fallback radius after the first round
+        extra = max(float(get_setting("fallback_radius_km")) - float(get_setting("default_service_radius_km")), 0)
+    candidates = broadcast_candidates(booking.service, booking.latitude, booking.longitude, booking.scheduled_start,
+                                      booking.scheduled_end, booking.payment_mode, exclude_ids=already,
+                                      extra_radius_km=extra)[: int(get_setting("broadcast_batch_size"))]
+    if not candidates:
+        cancel(booking, actor, "system", "No professional available nearby", waive_fee=True)
+        return []
+    booking.broadcast_round += 1
+    expires = timezone.now() + timedelta(minutes=int(get_setting("broadcast_round_minutes")))
+    booking.sla_due_at = expires
+    booking.save(update_fields=["broadcast_round", "sla_due_at"])
+    offers = []
+    for p, dist in candidates:
+        offers.append(BookingOffer.objects.create(booking=booking, partner=p, round=booking.broadcast_round,
+                                                  distance_km=dist, expires_at=expires))
+        notify(p.owner, "job_request", f"New job request: {booking.service.name}",
+               f"{timezone.localtime(booking.scheduled_start):%d %b, %I:%M %p} · {dist} km away · {booking.address.get('city')}. "
+               "First partner to accept gets the job.", booking_id=booking.id)
+    return offers
+
+
+@transaction.atomic
+def accept_offer(offer, actor):
+    booking = Booking.objects.select_for_update().get(pk=offer.booking_id)
+    offer = BookingOffer.objects.select_for_update().get(pk=offer.pk)
+    if booking.status != S.SEARCHING or offer.status != BookingOffer.Status.PENDING:
+        raise BusinessError("OFFER_NOT_AVAILABLE", "This job was already taken by another partner or has closed.", 409)
+    if offer.expires_at < timezone.now():
+        offer.status = BookingOffer.Status.EXPIRED
+        offer.save(update_fields=["status"])
+        raise BusinessError("OFFER_EXPIRED", "This job request has expired.", 410)
+    if slot_capacity(offer.partner, booking.service, booking.scheduled_start, booking.scheduled_end) <= 0:
+        raise BusinessError("SLOT_UNAVAILABLE", "You have no free professional for this time.", 409)
+    now = timezone.now()
+    offer.status, offer.responded_at = BookingOffer.Status.ACCEPTED, now
+    offer.save(update_fields=["status", "responded_at"])
+    booking.offers.filter(status=BookingOffer.Status.PENDING).exclude(pk=offer.pk).update(
+        status=BookingOffer.Status.LOST, responded_at=now)
+    booking.partner, booking.distance_km = offer.partner, offer.distance_km
+    booking.save(update_fields=["partner", "distance_km"])
+    accept(booking, actor)
+    return booking
+
+
+@transaction.atomic
+def decline_offer(offer, actor, reason=""):
+    if offer.status != BookingOffer.Status.PENDING:
+        raise BusinessError("OFFER_NOT_AVAILABLE", "This job request is no longer open.", 409)
+    offer.status, offer.responded_at, offer.decline_reason = BookingOffer.Status.DECLINED, timezone.now(), reason[:255]
+    offer.save(update_fields=["status", "responded_at", "decline_reason"])
+    booking = Booking.objects.select_for_update().get(pk=offer.booking_id)
+    if booking.status == S.SEARCHING and not booking.offers.filter(status=BookingOffer.Status.PENDING).exists():
+        broadcast_next_round(booking, actor)
+
+
 def accept(booking, actor):
-    transition(booking, S.CONFIRMED, actor, "Accepted by partner")
+    transition(booking, S.CONFIRMED, actor, f"Accepted by {booking.partner}")
     booking.accepted_at = timezone.now()
     booking.save(update_fields=["accepted_at"])
     notify(booking.customer, "booking_confirmed", "Booking confirmed",
@@ -210,26 +330,21 @@ def accept(booking, actor):
 
 @transaction.atomic
 def reject_or_fallback(booking, actor, reason="", auto=False):
-    """BR-B4: rejected / SLA missed -> nearest other partner (fallback radius) -> else cancel + refund."""
+    """BR-B4: the chosen partner rejected / missed the SLA -> broadcast to the nearest other partners
+    (gap P1) at the same price -> cancel + refund if nobody accepts."""
     if booking.status != S.PENDING_ACCEPTANCE:
         raise BusinessError("INVALID_STATUS_TRANSITION", "Only pending bookings can be rejected.")
-    rejected = set(booking.rejected_partner_ids) | {booking.partner_id}
-    booking.rejected_partner_ids = list(rejected)
-    extra = float(get_setting("fallback_radius_km")) - float(get_setting("default_service_radius_km"))
-    options = find_partners(booking.service, booking.latitude, booking.longitude, exclude_ids=rejected,
-                            extra_radius_km=max(extra, 0), limit=1)
     old_partner = booking.partner
-    if options:
-        new_partner, dist = options[0]
-        booking.partner, booking.distance_km = new_partner, dist
-        booking.fallback_count += 1
-        booking.save()
-        transition(booking, S.PENDING_ACCEPTANCE, actor, f"Moved from {old_partner} to {new_partner}: {reason or 'not accepted'}")
-        send_to_partner(booking)
+    booking.rejected_partner_ids = list(set(booking.rejected_partner_ids) | {booking.partner_id})
+    booking.partner, booking.dispatch_mode = None, Booking.DispatchMode.BROADCAST
+    booking.fallback_count += 1
+    booking.save()
+    transition(booking, S.SEARCHING, actor, f"{old_partner} could not take it: {reason or 'not accepted'}")
+    offers = broadcast_next_round(booking, actor)
+    if offers:
         notify(booking.customer, "booking_reassigned", "Finding the best provider",
-               f"Your booking {booking.booking_no} has been moved to {new_partner.display_name}.", booking_id=booking.id)
-    else:
-        cancel(booking, actor, "system", reason or "No provider available", waive_fee=True)
+               f"{old_partner} is unavailable, so we sent booking {booking.booking_no} to other nearby professionals.",
+               booking_id=booking.id)
 
 
 def assign(booking, actor, coworker_ids):
@@ -308,7 +423,7 @@ def cancellation_fee(booking, by):
     if booking.status in (S.ON_THE_WAY, S.ARRIVED):
         return money(booking.visit_charge or get_setting("late_cancel_fee"))
     hours_left = (booking.scheduled_start - timezone.now()).total_seconds() / 3600
-    if hours_left < float(get_setting("free_cancel_hours")) and booking.status not in (S.PAYMENT_PENDING, S.PENDING_ACCEPTANCE):
+    if hours_left < float(get_setting("free_cancel_hours")) and booking.status not in (S.PAYMENT_PENDING, S.SEARCHING, S.PENDING_ACCEPTANCE):
         return money(get_setting("late_cancel_fee"))
     return Decimal("0")
 
@@ -324,7 +439,8 @@ def cancel(booking, actor, by, reason, waive_fee=False):
         refund_booking(booking, booking.amount_paid - fee, f"Cancellation: {reason}", actor)
     notify(booking.customer, "booking_cancelled", "Booking cancelled",
            f"Booking {booking.booking_no} was cancelled. {('Fee: ₹%s' % fee) if fee else ''}".strip(), booking_id=booking.id)
-    if by != "partner":
+    booking.offers.filter(status=BookingOffer.Status.PENDING).update(status=BookingOffer.Status.EXPIRED)
+    if by != "partner" and booking.partner_id:
         notify(booking.partner.owner, "booking_cancelled", "Booking cancelled", f"{booking.booking_no}: {reason}", booking_id=booking.id)
     for c in booking.active_coworkers:
         notify(c.user, "job_cancelled", "Job cancelled", f"{booking.booking_no} was cancelled.", booking_id=booking.id)

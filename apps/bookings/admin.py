@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Booking, BookingAssignment, BookingItem, BookingStatusHistory
+from .models import Booking, BookingAssignment, BookingItem, BookingOffer, BookingStatusHistory
 
 
 class ItemInline(admin.TabularInline):
@@ -23,3 +23,9 @@ class BookingAdmin(admin.ModelAdmin):
 
 
 admin.site.register(BookingAssignment)
+
+
+@admin.register(BookingOffer)
+class BookingOfferAdmin(admin.ModelAdmin):
+    list_display = ("booking", "partner", "round", "distance_km", "status", "expires_at")
+    list_filter = ("status",)
