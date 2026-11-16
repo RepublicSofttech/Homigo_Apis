@@ -2,16 +2,16 @@ services:
   db:
     image: postgres:16
     environment:
-      POSTGRES_DB: homeserv
-      POSTGRES_USER: homeserv
-      POSTGRES_PASSWORD: homeserv
+      POSTGRES_DB: homigo
+      POSTGRES_USER: homigo
+      POSTGRES_PASSWORD: homigo
     ports: ["5432:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
   api:
     build: .
     env_file: .env
     environment:
-      DATABASE_URL: postgres://homeserv:homeserv@db:5432/homeserv
+      DATABASE_URL: postgres://homigo:homigo@db:5432/homigo
     ports: ["8000:8000"]
     depends_on: [db]
 volumes:
