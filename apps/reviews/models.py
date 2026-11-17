@@ -24,3 +24,27 @@ class Review(TimeStampedModel):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class Testimonial(TimeStampedModel):
+    """Admin-curated testimonial for the public website (from a real customer or partner, with their consent)."""
+
+    class Audience(models.TextChoices):
+        CUSTOMER = "customer", "Customer"
+        PARTNER = "partner", "Partner"
+
+    audience = models.CharField(max_length=20, choices=Audience.choices, default=Audience.CUSTOMER)
+    name = models.CharField(max_length=80, help_text="As the person agreed to be shown, e.g. 'Priya S.'")
+    location = models.CharField(max_length=80, blank=True)
+    role = models.CharField(max_length=80, blank=True, help_text="Service booked, or the partner's business type")
+    quote = models.TextField(max_length=400)
+    rating = models.PositiveSmallIntegerField(validators=RATING, default=5)
+    consent = models.BooleanField(default=False, help_text="The person agreed to have this shown on the website")
+    is_published = models.BooleanField(default=False)
+    sort_order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["sort_order", "-created_at"]
+
+    def __str__(self):
+        return f"{self.name} ({self.audience})"
