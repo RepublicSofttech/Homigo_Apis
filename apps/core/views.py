@@ -45,3 +45,40 @@ class AuditLogViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     serializer_class = AuditLogSerializer
     queryset = AuditLog.objects.select_related("actor").all()
     filterset_fields = ["action", "entity"]
+
+
+class PublicStatsView(APIView):
+    """Real platform numbers for the public website (cached 10 min)."""
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        from django.core.cache import cache
+
+        data = cache.get("public_stats")
+        if data is None:
+            from django.db.models import Avg, Count
+
+            from apps.bookings.models import Booking, BookingStatus
+            from apps.catalogue.models import Service
+            from apps.partners.models import AreaPartner, Coworker, VerificationStatus
+            from apps.reviews.models import Review
+
+            partners = AreaPartner.objects.filter(
+                verification_status=VerificationStatus.APPROVED, account_status=AreaPartner.AccountStatus.ACTIVE
+            )
+            reviews = Review.objects.filter(is_published=True).aggregate(avg=Avg("rating_partner"), n=Count("id"))
+            data = {
+                "bookings_completed": Booking.objects.filter(status=BookingStatus.COMPLETED).count(),
+                "verified_partners": partners.count(),
+                "verified_professionals": Coworker.objects.filter(
+                    verification_status=VerificationStatus.APPROVED, status=Coworker.Status.ACTIVE
+                ).count(),
+                "cities": partners.values("city").distinct().count(),
+                "services": Service.objects.filter(is_active=True).count(),
+                "average_rating": round(float(reviews["avg"]), 1) if reviews["avg"] else None,
+                "reviews_count": reviews["n"],
+            }
+            cache.set("public_stats", data, 600)
+        return Response(data)
