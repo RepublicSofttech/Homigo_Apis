@@ -54,6 +54,40 @@ class PartnerPublicReviews(generics.ListAPIView):
         return Review.objects.filter(partner_id=self.kwargs["pk"], is_published=True).select_related("customer", "booking__service")
 
 
+class FeaturedReviews(generics.GenericAPIView):
+    """Public homepage testimonials: latest published 4-5 star reviews with a written comment.
+    Customer names are shortened ("Priya S.") and no booking or address details are exposed."""
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        qs = (
+            Review.objects.filter(is_published=True, reported=False, rating_partner__gte=4)
+            .exclude(comment="")
+            .select_related("customer", "partner", "booking__service")[:8]
+        )
+
+        def short_name(u):
+            first, last = (u.first_name or "").strip(), (u.last_name or "").strip()
+            if not first:
+                return "Homigo customer"
+            return f"{first} {last[0]}." if last else first
+
+        return Response([
+            {
+                "id": r.id,
+                "rating": r.rating_partner,
+                "comment": r.comment[:280],
+                "customer": short_name(r.customer),
+                "service": r.booking.service.name,
+                "city": r.partner.city,
+                "created_at": r.created_at,
+            }
+            for r in qs
+        ])
+
+
 class PartnerReviewViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     permission_classes = [IsPartner]
     serializer_class = ReviewSerializer

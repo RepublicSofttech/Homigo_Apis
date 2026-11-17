@@ -6,4 +6,7 @@ from . import views
 router = DefaultRouter()
 router.register("admin/settings", views.AppSettingViewSet, basename="admin-setting")
 router.register("admin/audit-logs", views.AuditLogViewSet, basename="admin-audit")
-urlpatterns = [path("health/", views.HealthView.as_view())] + router.urls
+urlpatterns = [
+    path("health/", views.HealthView.as_view()),
+    path("public/stats/", views.PublicStatsView.as_view()),
+] + router.urls
