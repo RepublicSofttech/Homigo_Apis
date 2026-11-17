@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Review
+from .models import Review, Testimonial
 
 
 class ReviewSerializer(serializers.ModelSerializer):
@@ -17,3 +17,16 @@ class ReviewSerializer(serializers.ModelSerializer):
         # Privacy: first name + initial only
         u = obj.customer
         return f"{u.first_name} {u.last_name[:1]}.".strip() if u.first_name else "Customer"
+
+
+class TestimonialSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Testimonial
+        fields = "__all__"
+
+    def validate(self, attrs):
+        published = attrs.get("is_published", getattr(self.instance, "is_published", False))
+        consent = attrs.get("consent", getattr(self.instance, "consent", False))
+        if published and not consent:
+            raise serializers.ValidationError({"consent": "Get the person's consent before publishing their testimonial."})
+        return attrs

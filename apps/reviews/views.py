@@ -13,8 +13,8 @@ from apps.core.utils import audit
 from apps.notifications.services import notify
 from apps.partners.views import get_partner
 
-from .models import Review
-from .serializers import ReviewSerializer
+from .models import Review, Testimonial
+from .serializers import ReviewSerializer, TestimonialSerializer
 from .services import refresh_ratings
 
 
@@ -133,3 +133,31 @@ class AdminReviewViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         refresh_ratings(r.partner, r.coworker)
         audit(request.user, "review_moderate", r, publish=r.is_published, note=note)
         return Response(ReviewSerializer(r).data)
+
+
+class AdminTestimonialViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsPlatformAdmin]
+    serializer_class = TestimonialSerializer
+    queryset = Testimonial.objects.all()
+    filterset_fields = ["audience", "is_published"]
+
+
+class PublicTestimonials(generics.GenericAPIView):
+    """Website testimonials: published, consented curated testimonials first; for customers,
+    followed by real 4-5 star reviews from completed bookings."""
+
+    permission_classes = [permissions.AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        audience = request.query_params.get("audience", "customer")
+        if audience not in Testimonial.Audience.values:
+            audience = "customer"
+        items = [
+            {"id": f"t{t.id}", "name": t.name, "location": t.location, "role": t.role, "quote": t.quote, "rating": t.rating, "verified_booking": False}
+            for t in Testimonial.objects.filter(audience=audience, is_published=True, consent=True)[:12]
+        ]
+        if audience == "customer":
+            for r in FeaturedReviews().get(request).data:
+                items.append({"id": f"r{r['id']}", "name": r["customer"], "location": r["city"], "role": r["service"], "quote": r["comment"], "rating": r["rating"], "verified_booking": True})
+        return Response(items[:12])
